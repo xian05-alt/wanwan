@@ -150,6 +150,11 @@
   background: var(--c-bg);
   flex-shrink: 0;
 }
+.lb-binding-label {
+  font-size: 12px;
+  color: var(--c-sub);
+  flex-shrink: 0;
+}
 .lb-binding-tags {
   flex: 1;
   display: flex;
@@ -157,3 +162,114 @@
   gap: 4px;
   min-width: 0;
 }
+.lb-binding-bar .btn-sm { flex-shrink: 0; }
+.lb-scope-tag {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--c-card);
+  color: var(--c-sub);
+  font-size: 12px;
+}
+.lb-scope-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lb-scope-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.lb-scope-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lb-scope-option b {
+  color: var(--c-text);
+  font-size: 14px;
+  font-weight: 500;
+}
+.lb-scope-option small {
+  color: var(--c-hint);
+  font-size: 11px;
+}
+#bind-chars-section.is-hidden { display: none; }
+
+/* Float 风格的世界书绑定悬浮球 */
+.lb-binding-fab {
+  position: absolute;
+  right: 18px;
+  bottom: calc(20px + env(safe-area-inset-bottom));
+  width: 52px;
+  height: 52px;
+  border: 1px solid rgba(255, 255, 255, .7);
+  border-radius: 50%;
+  background: rgba(45, 45, 45, .88);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .2);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 19px;
+  z-index: 8;
+  cursor: pointer;
+}
+.lb-binding-fab:active { transform: scale(.94); }
+.lb-binding-hub-help {
+  padding: 0 16px 10px;
+  color: var(--c-sub);
+  font-size: 12px;
+}
+.lb-binding-hub-list {
+  max-height: min(52vh, 440px);
+  overflow-y: auto;
+  padding: 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.lb-binding-hub-item {
+  width: 100%;
+  min-height: 58px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-card);
+  color: var(--c-text);
+  padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  cursor: pointer;
+}
+.lb-binding-hub-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lb-binding-hub-name,
+.lb-binding-hub-current {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lb-binding-hub-name { font-size: 14px; }
+.lb-binding-hub-current { color: var(--c-hint); font-size: 11px; }
+.lb-binding-hub-scope {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--c-bg);
+  color: var(--c-sub);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.lb-binding-hub-item > .fa { color: var(--c-hint); flex-shrink: 0; }
