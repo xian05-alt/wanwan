@@ -14,6 +14,95 @@ async function loadLorebooks() {
 // ===== 保存世界书数组到db =====
 async function saveLorebooks(books) {
   await db.config.put({ key: 'lorebooks', value: books })
+  window.dispatchEvent(new CustomEvent('wanwan-lorebooks-updated'))
+}
+
+const LOREBOOK_GROUPS_KEY = 'lorebookGroups'
+
+async function loadLorebookGroups() {
+  const row = await db.config.get(LOREBOOK_GROUPS_KEY)
+  return row && Array.isArray(row.value) ? row.value : []
+}
+
+async function saveLorebookGroups(groups) {
+  await db.config.put({ key: LOREBOOK_GROUPS_KEY, value: groups })
+  window.dispatchEvent(new CustomEvent('wanwan-lorebook-groups-updated'))
+}
+
+async function getLorebookQuickState(scope, charId) {
+  const books = await loadLorebooks()
+  const groups = await loadLorebookGroups()
+  const selectedIds = books.filter(book => {
+    if (!book.enabled) return false
+    if (scope === 'character') {
+      return book.scope === 'personal' && (book.charIds || []).includes(Number(charId))
+    }
+    return book.scope !== 'personal'
+  }).map(book => book.id)
+  const inheritedIds = scope === 'character'
+    ? books.filter(book => book.enabled && book.scope !== 'personal').map(book => book.id)
+    : []
+  return { books, groups, selectedIds, inheritedIds }
+}
+
+async function setLorebookQuickSelection(scope, charId, selectedIds) {
+  const books = await loadLorebooks()
+  const wanted = new Set(selectedIds || [])
+  const numericCharId = Number(charId)
+  if (scope === 'character' && !numericCharId) return books
+
+  books.forEach(book => {
+    if (scope === 'global') {
+      if (wanted.has(book.id)) {
+        book.scope = 'global'
+        book.charIds = []
+        book.enabled = true
+      } else if (book.scope !== 'personal') {
+        book.enabled = false
+      }
+      return
+    }
+
+    if (book.scope !== 'personal') return
+    const ids = new Set((book.charIds || []).map(Number))
+    if (wanted.has(book.id)) {
+      ids.add(numericCharId)
+      book.enabled = true
+    } else {
+      ids.delete(numericCharId)
+      if (!ids.size) book.enabled = false
+    }
+    book.charIds = [...ids]
+  })
+
+  if (scope === 'character') {
+    books.forEach(book => {
+      if (!wanted.has(book.id) || book.scope === 'personal') return
+      if (book.scope === 'global' && book.enabled) return
+      book.scope = 'personal'
+      book.charIds = [numericCharId]
+      book.enabled = true
+    })
+  }
+
+  await saveLorebooks(books)
+  return books
+}
+
+async function setAllLorebooksStandby() {
+  const books = await loadLorebooks()
+  books.forEach(book => { book.enabled = false })
+  await saveLorebooks(books)
+  return books
+}
+
+window.WanWanLorebooks = {
+  loadBooks: loadLorebooks,
+  loadGroups: loadLorebookGroups,
+  saveGroups: saveLorebookGroups,
+  getQuickState: getLorebookQuickState,
+  setQuickSelection: setLorebookQuickSelection,
+  setAllStandby: setAllLorebooksStandby
 }
 
 // ===== 条目注入时机/顺序 =====
@@ -98,6 +187,7 @@ function buildLorebookListPage() {
       </button>
       <span class="header-title">世界书</span>
       <div style="display:flex;gap:8px">
+        <button class="btn-icon" id="btn-lb-groups" title="世界书组合"><i class="fa fa-layer-group"></i></button>
         <button class="btn-icon" id="btn-new-lb"><i class="fa fa-plus"></i></button>
       </div>
     </div>
@@ -108,9 +198,6 @@ function buildLorebookListPage() {
       <button class="scope-tab" data-scope="personal">单人</button>
     </div>
     <div class="lb-list" id="lb-list"></div>
-    <button class="lb-binding-fab" id="btn-lb-binding-hub" title="角色绑定" aria-label="打开世界书角色绑定">
-      <i class="fa fa-link"></i>
-    </button>
   `
   bindLbListEvents(page)
   loadLbList(page, 'all')
@@ -199,18 +286,19 @@ function bindLbListEvents(page) {
   })
 
   page.querySelector('#btn-new-lb').addEventListener('click', () => showNewLbModal(page))
-  page.querySelector('#btn-lb-binding-hub').addEventListener('click', () => showBindingHub(page))
+  page.querySelector('#btn-lb-groups').addEventListener('click', () => showLorebookGroupsModal())
 }
 
-// ===== 悬浮球：统一管理世界书绑定 =====
-async function showBindingHub(listPage) {
+// ===== 世界书组合 =====
+async function showLorebookGroupsModal() {
   const overlay = lbCreateOverlay()
   const modal = lbCreateSheet(`
-    <div class="sheet-title">世界书绑定</div>
-    <div class="lb-binding-hub-help">点一本世界书，设为全局或绑定给指定角色。</div>
-    <div class="lb-binding-hub-list" id="lb-binding-hub-list"></div>
+    <div class="sheet-title">世界书组合</div>
+    <div class="lb-group-help">把常用世界书存成一组，之后可在全局悬浮球里一键切换。</div>
+    <div class="lb-group-list" id="lb-group-list"></div>
     <div class="sheet-actions">
-      <button class="btn-pill btn-full" id="btn-close-binding-hub">完成</button>
+      <button class="btn-pill btn-full" id="btn-new-lb-group"><i class="fa fa-plus"></i> 新建组合</button>
+      <button class="btn-ghost btn-full" id="btn-close-lb-groups">完成</button>
     </div>
   `)
   document.getElementById('app').appendChild(overlay)
@@ -222,44 +310,95 @@ async function showBindingHub(listPage) {
     setTimeout(() => { overlay.remove(); modal.remove() }, 200)
   }
   overlay.addEventListener('click', close)
-  modal.querySelector('#btn-close-binding-hub').addEventListener('click', close)
+  modal.querySelector('#btn-close-lb-groups').addEventListener('click', close)
 
-  const renderHub = async () => {
-    const books = await loadLorebooks()
-    const chars = (await db.characters.toArray()).filter(c => c.type === 'char' || c.type === 'npc')
-    const hubList = modal.querySelector('#lb-binding-hub-list')
-    if (!books.length) {
-      hubList.innerHTML = '<div class="list-empty">暂无世界书</div>'
+  const renderGroups = async () => {
+    const [groups, books] = await Promise.all([loadLorebookGroups(), loadLorebooks()])
+    const list = modal.querySelector('#lb-group-list')
+    if (!groups.length) {
+      list.innerHTML = '<div class="list-empty">还没有保存组合</div>'
       return
     }
-    hubList.innerHTML = books.map(book => {
-      const boundNames = (book.charIds || [])
-        .map(id => chars.find(c => c.id === id)?.name)
-        .filter(Boolean)
-      const bindingText = book.scope === 'personal'
-        ? (boundNames.length ? boundNames.join('、') : '未绑定角色')
-        : '全部角色'
+    list.innerHTML = groups.map(group => {
+      const count = (group.bookIds || []).filter(id => books.some(book => book.id === id)).length
       return `
-        <button class="lb-binding-hub-item" data-id="${book.id}">
-          <span class="lb-binding-hub-copy">
-            <span class="lb-binding-hub-name">${lbEscapeHTML(book.name || '未命名')}</span>
-            <span class="lb-binding-hub-current">${lbEscapeHTML(bindingText)}</span>
+        <button class="lb-group-item" data-id="${group.id}">
+          <span class="lb-group-copy">
+            <span class="lb-group-name">${lbEscapeHTML(group.name || '未命名组合')}</span>
+            <span class="lb-group-count">${count} 本世界书</span>
           </span>
-          <span class="lb-binding-hub-scope">${book.scope === 'personal' ? '单人' : '全局'}</span>
           <i class="fa fa-angle-right"></i>
         </button>
       `
     }).join('')
-
-    hubList.querySelectorAll('.lb-binding-hub-item').forEach(button => {
+    list.querySelectorAll('.lb-group-item').forEach(button => {
       button.addEventListener('click', () => {
-        const book = books.find(item => item.id === button.dataset.id)
-        if (book) showEditBindingModal(listPage, book, renderHub)
+        const group = groups.find(item => item.id === button.dataset.id)
+        if (group) showLorebookGroupEditor(group, renderGroups)
       })
     })
   }
 
-  await renderHub()
+  modal.querySelector('#btn-new-lb-group').addEventListener('click', () => showLorebookGroupEditor(null, renderGroups))
+  await renderGroups()
+}
+
+async function showLorebookGroupEditor(group, onSaved) {
+  const books = await loadLorebooks()
+  const selected = new Set(group?.bookIds || [])
+  const overlay = lbCreateOverlay()
+  const modal = lbCreateSheet(`
+    <div class="sheet-title">${group ? '编辑组合' : '新建组合'}</div>
+    <div class="lb-group-editor">
+      <input class="input-field" id="lb-group-name-input" placeholder="例如：诸振宥 · 常宁" value="${lbEscapeHTML(group?.name || '')}">
+      <div class="lb-group-picker">
+        ${books.map(book => `
+          <label class="lb-group-picker-item">
+            <input type="checkbox" class="lb-group-book-cb" value="${book.id}" ${selected.has(book.id) ? 'checked' : ''}>
+            <span>${lbEscapeHTML(book.name || '未命名')}</span>
+          </label>
+        `).join('')}
+        ${!books.length ? '<div class="list-empty">暂无世界书</div>' : ''}
+      </div>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-pill btn-full" id="btn-save-lb-group">保存组合</button>
+      ${group ? '<button class="btn-ghost btn-full" id="btn-delete-lb-group" style="color:var(--c-red)">删除组合</button>' : ''}
+    </div>
+  `)
+  document.getElementById('app').appendChild(overlay)
+  document.getElementById('app').appendChild(modal)
+  requestAnimationFrame(() => { overlay.classList.add('show'); modal.classList.add('show') })
+  const close = () => {
+    overlay.classList.remove('show'); modal.classList.remove('show')
+    setTimeout(() => { overlay.remove(); modal.remove() }, 200)
+  }
+  overlay.addEventListener('click', close)
+  modal.querySelector('#btn-save-lb-group').addEventListener('click', async () => {
+    const name = modal.querySelector('#lb-group-name-input').value.trim()
+    const bookIds = [...modal.querySelectorAll('.lb-group-book-cb:checked')].map(input => input.value)
+    if (!name) { window.toast('请填写组合名称'); return }
+    if (!bookIds.length) { window.toast('请至少选择一本世界书'); return }
+    const groups = await loadLorebookGroups()
+    if (group) {
+      const target = groups.find(item => item.id === group.id)
+      if (target) { target.name = name; target.bookIds = bookIds; target.updatedAt = Date.now() }
+    } else {
+      groups.push({ id: lbGenId(), name, bookIds, createdAt: Date.now(), updatedAt: Date.now() })
+    }
+    await saveLorebookGroups(groups)
+    await onSaved()
+    window.toast('世界书组合已保存')
+    close()
+  })
+  const deleteButton = modal.querySelector('#btn-delete-lb-group')
+  if (deleteButton) deleteButton.addEventListener('click', async () => {
+    if (!confirm('确认删除这个组合？世界书不会被删除。')) return
+    const groups = await loadLorebookGroups()
+    await saveLorebookGroups(groups.filter(item => item.id !== group.id))
+    await onSaved()
+    close()
+  })
 }
 
 // ===== 新建世界书弹窗 =====
