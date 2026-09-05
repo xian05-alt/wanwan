@@ -455,17 +455,13 @@ document.addEventListener('DOMContentLoaded', async function() {
     _onSplashReady()
   }
 
-  // ===== 保活音频 visibilitychange 恢复 =====
+  // ===== 回前台后恢复后台保活 =====
   document.addEventListener('visibilitychange', async function() {
     if (document.visibilityState !== 'visible') return
-    if (window._avgBgmActive) return  // 橙光 BGM 播放中自带保活，避免双音频流
+    if (window._avgBgmActive) return
     var cfg = await db.config.get('keepAliveEnabled')
     if (!cfg || !cfg.value) return
-    var audio = document.getElementById('keepalive-audio')
-    if (audio && audio.paused) {
-      audio.volume = 0
-      audio.play().catch(function() {})
-    }
+    if (window.WanWanKeepAlive) window.WanWanKeepAlive.resume()
   })
 })
 
