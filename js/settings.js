@@ -2064,6 +2064,8 @@ async function openFloatingBallPresetPopup(ball) {
     content += '<div class="floating-ball-preset-empty">尚未添加 API 分组</div>' +
       '<button type="button" class="floating-ball-config-link" id="floating-ball-open-api-config">前往 API 配置</button>'
   }
+  content += '<div class="floating-ball-context-divider"></div>' +
+    '<div id="floating-ball-worldbook-controls"></div>'
   content +=
     '<div class="floating-ball-popup-actions">' +
       '<button type="button" class="floating-ball-home-link" id="floating-ball-go-home">' +
@@ -2115,9 +2117,128 @@ async function openFloatingBallPresetPopup(ball) {
     closeFloatingBallPresetPopup()
     openApiConfigPage()
   })
+  await initFloatingBallWorldbookControls(popup)
   var homeLink = popup.querySelector('#floating-ball-go-home')
   if (homeLink) homeLink.addEventListener('click', returnToDesktopHome)
   positionFloatingBallPopup(popup, ball)
+}
+
+async function initFloatingBallWorldbookControls(popup) {
+  var host = popup.querySelector('#floating-ball-worldbook-controls')
+  var manager = window.WanWanLorebooks
+  if (!host || !manager) return
+  var scope = 'global'
+  var characters = (await db.characters.toArray()).filter(function(character) {
+    return character.type === 'char' || character.type === 'npc'
+  })
+  var selectedCharId = characters.length ? String(characters[0].id) : ''
+
+  async function render() {
+    var state = await manager.getQuickState(scope, selectedCharId)
+    var selected = new Set(state.selectedIds || [])
+    var inherited = new Set(state.inheritedIds || [])
+    var effectiveCount = new Set([].concat(state.selectedIds || [], state.inheritedIds || [])).size
+    host.innerHTML =
+      '<div class="floating-ball-worldbook-heading">' +
+        '<span><i class="fa-solid fa-book-open"></i> 世界书</span>' +
+        '<button type="button" id="floating-ball-standby-all">全部静置</button>' +
+      '</div>' +
+      '<div class="floating-ball-worldbook-tabs">' +
+        '<button type="button" data-lb-scope="global" class="' + (scope === 'global' ? 'is-current' : '') + '">全局</button>' +
+        '<button type="button" data-lb-scope="character" class="' + (scope === 'character' ? 'is-current' : '') + '">角色</button>' +
+      '</div>' +
+      (scope === 'character'
+        ? '<select class="floating-ball-worldbook-character" id="floating-ball-worldbook-character" ' + (!characters.length ? 'disabled' : '') + '>' +
+            (characters.length
+              ? characters.map(function(character) {
+                  return '<option value="' + character.id + '" ' + (String(character.id) === selectedCharId ? 'selected' : '') + '>' + settingsEscHtml(character.name || '未命名角色') + '</option>'
+                }).join('')
+              : '<option>暂无角色</option>') +
+          '</select>'
+        : '') +
+      '<div class="floating-ball-worldbook-summary">' +
+        '<span>当前启用 ' + effectiveCount + ' 本</span>' +
+        '<button type="button" id="floating-ball-clear-scope" ' + (!state.selectedIds.length ? 'disabled' : '') + '>清空当前</button>' +
+      '</div>' +
+      (scope === 'character' && inherited.size
+        ? '<div class="floating-ball-worldbook-inherited">另继承全局 ' + inherited.size + ' 本</div>'
+        : '') +
+      (state.groups.length
+        ? '<div class="floating-ball-worldbook-label">已保存组合</div><div class="floating-ball-worldbook-chips">' +
+            state.groups.map(function(group, index) {
+              var ids = (group.bookIds || []).filter(function(id) { return state.books.some(function(book) { return book.id === id }) })
+              var active = ids.length > 0 && ids.length === selected.size && ids.every(function(id) { return selected.has(id) })
+              return '<button type="button" class="floating-ball-worldbook-chip' + (active ? ' is-current' : '') + '" data-lb-group="' + index + '">' +
+                '<span>' + settingsEscHtml(group.name || '未命名组合') + '</span>' +
+                (active ? '<i class="fa-solid fa-check"></i>' : '') +
+              '</button>'
+            }).join('') +
+          '</div>'
+        : '<div class="floating-ball-worldbook-empty">还没有保存组合</div>') +
+      '<div class="floating-ball-worldbook-label">单本调整</div>' +
+      '<div class="floating-ball-worldbook-chips">' +
+        state.books.map(function(book) {
+          var isSelected = selected.has(book.id)
+          var isInherited = inherited.has(book.id)
+          return '<button type="button" class="floating-ball-worldbook-chip' + (isSelected ? ' is-current' : '') + (isInherited ? ' is-inherited' : '') + '" data-lb-book="' + settingsEscHtml(book.id) + '" ' + (isInherited ? 'disabled' : '') + '>' +
+            '<span>' + settingsEscHtml(book.name || '未命名') + '</span>' +
+            (isSelected ? '<i class="fa-solid fa-check"></i>' : '') +
+          '</button>'
+        }).join('') +
+      '</div>' +
+      '<button type="button" class="floating-ball-worldbook-manage" id="floating-ball-manage-groups">管理世界书组合</button>'
+
+    host.querySelectorAll('[data-lb-scope]').forEach(function(button) {
+      button.addEventListener('click', async function() {
+        scope = button.getAttribute('data-lb-scope')
+        await render()
+      })
+    })
+    var characterSelect = host.querySelector('#floating-ball-worldbook-character')
+    if (characterSelect) characterSelect.addEventListener('change', async function() {
+      selectedCharId = characterSelect.value
+      await render()
+    })
+    host.querySelector('#floating-ball-standby-all').addEventListener('click', async function() {
+      await manager.setAllStandby()
+      await render()
+      window.toast('全部世界书已静置')
+    })
+    host.querySelector('#floating-ball-clear-scope').addEventListener('click', async function() {
+      await manager.setQuickSelection(scope, selectedCharId, [])
+      await render()
+      window.toast(scope === 'global' ? '全局世界书已清空' : '角色世界书已清空')
+    })
+    host.querySelectorAll('[data-lb-group]').forEach(function(button) {
+      button.addEventListener('click', async function() {
+        var group = state.groups[parseInt(button.getAttribute('data-lb-group'), 10)]
+        if (!group) return
+        await manager.setQuickSelection(scope, selectedCharId, group.bookIds || [])
+        await render()
+        window.toast('已切换世界书组合：' + group.name)
+      })
+    })
+    host.querySelectorAll('[data-lb-book]').forEach(function(button) {
+      button.addEventListener('click', async function() {
+        var id = button.getAttribute('data-lb-book')
+        var next = new Set(state.selectedIds || [])
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        await manager.setQuickSelection(scope, selectedCharId, [...next])
+        await render()
+      })
+    })
+    host.querySelector('#floating-ball-manage-groups').addEventListener('click', function() {
+      closeFloatingBallPresetPopup()
+      if (window.showLorebookPage) window.showLorebookPage()
+      setTimeout(function() {
+        var button = document.querySelector('#lorebook-page #btn-lb-groups')
+        if (button) button.click()
+      }, 240)
+    })
+  }
+
+  await render()
 }
 
 function positionFloatingBallPopup(popup, ball) {
