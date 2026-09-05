@@ -1582,10 +1582,9 @@
     if (!id) return
     _bgm.id = id
     if (name) _bgm.name = name
-    // BGM 自身可保活，播放期间暂停保活音频，避免 iOS 上两条音频流互抢
+    // BGM 自身可保活，播放期间挂起额外的 Web Audio 会话
     window._avgBgmActive = true
-    var keepalive = document.getElementById('keepalive-audio')
-    if (keepalive && !keepalive.paused) keepalive.pause()
+    if (window.WanWanKeepAlive) window.WanWanKeepAlive.suspendForMedia()
     if (!_bgm.audio) {
       _bgm.audio = new Audio()
       _bgm.audio.loop = true
@@ -1612,14 +1611,7 @@
       _bgm.audio = null
     }
     window._avgBgmActive = false
-    var cfg = await db.config.get('keepAliveEnabled')
-    if (cfg && cfg.value) {
-      var keepalive = document.getElementById('keepalive-audio')
-      if (keepalive && keepalive.paused) {
-        keepalive.volume = 0
-        keepalive.play().catch(function() {})
-      }
-    }
+    if (window.WanWanKeepAlive) window.WanWanKeepAlive.resumeAfterMedia()
   }
 
   // 回前台后系统可能已暂停 BGM，恢复播放

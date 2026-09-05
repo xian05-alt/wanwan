@@ -48,7 +48,7 @@ function buildNotifSection() {
     '</div>' +
     '<div class="list-row" data-action="toggle">' +
       '<div class="row-icon-box"><i class="fa fa-bolt"></i></div>' +
-      '<div class="row-body"><div class="row-label">强力保活</div></div>' +
+      '<div class="row-body"><div class="row-label">后台保活</div><div class="row-sub">静默运行，不占用灵动岛音频</div></div>' +
       '<label class="toggle-wrap"><input type="checkbox" id="toggle-keepalive">' +
         '<div class="toggle-track"></div><div class="toggle-thumb"></div></label>' +
     '</div>' +
@@ -460,10 +460,6 @@ async function initNotifSection(page) {
   })
 }
 
-// ===== 保活状态 =====
-var _keepAliveWorker = null
-var _keepAliveAudio = null
-
 async function initKeepAliveSection(page) {
   var toggle = page.querySelector('#toggle-keepalive')
   var cfg = await db.config.get('keepAliveEnabled')
@@ -478,53 +474,16 @@ async function initKeepAliveSection(page) {
   })
 }
 
-// ===== 启动保活（Worker心跳 + 静音音频） =====
+// ===== 启动保活（Worker + Wake Lock + 非 iOS Web Audio） =====
 function startKeepAlive() {
-  if (!_keepAliveWorker) {
-    var code = "setInterval(function(){postMessage('ping')},5000)"
-    var blob = new Blob([code], { type: 'application/javascript' })
-    var blobUrl = URL.createObjectURL(blob)
-    _keepAliveWorker = new Worker(blobUrl)
-    URL.revokeObjectURL(blobUrl) // Worker 已持有引用，URL 可立即释放
-    _keepAliveWorker.onmessage = function() {}
-  }
-  if (!_keepAliveAudio) {
-    _keepAliveAudio = document.getElementById('keepalive-audio')
-  }
-  if (_keepAliveAudio) {
-    _keepAliveAudio.volume = 0
-    _keepAliveAudio.play().catch(function() {
-      document.addEventListener('click', function _retry() {
-        if (_keepAliveAudio) {
-          _keepAliveAudio.volume = 0
-          _keepAliveAudio.play().catch(function() {})
-        }
-        document.removeEventListener('click', _retry)
-      }, { once: true })
-    })
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: '弯弯',
-        artist: '',
-        album: '',
-        artwork: [
-          { src: 'img/wanwan.png', sizes: '512x512', type: 'image/png' }
-        ]
-      })
-    }
-  }
+  if (!window.WanWanKeepAlive) return
+  window.WanWanKeepAlive.start()
+  if (window._avgBgmActive) window.WanWanKeepAlive.suspendForMedia()
 }
 
 // ===== 停止保活 =====
 function stopKeepAlive() {
-  if (_keepAliveWorker) { _keepAliveWorker.terminate(); _keepAliveWorker = null }
-  if (_keepAliveAudio) {
-    _keepAliveAudio.pause()
-    _keepAliveAudio.currentTime = 0
-  }
-  if ('mediaSession' in navigator) {
-    navigator.mediaSession.metadata = null
-  }
+  if (window.WanWanKeepAlive) window.WanWanKeepAlive.stop()
 }
 
 // ===== 启动时加载设置 =====
