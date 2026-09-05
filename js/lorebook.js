@@ -108,6 +108,9 @@ function buildLorebookListPage() {
       <button class="scope-tab" data-scope="personal">单人</button>
     </div>
     <div class="lb-list" id="lb-list"></div>
+    <button class="lb-binding-fab" id="btn-lb-binding-hub" title="角色绑定" aria-label="打开世界书角色绑定">
+      <i class="fa fa-link"></i>
+    </button>
   `
   bindLbListEvents(page)
   loadLbList(page, 'all')
@@ -196,6 +199,67 @@ function bindLbListEvents(page) {
   })
 
   page.querySelector('#btn-new-lb').addEventListener('click', () => showNewLbModal(page))
+  page.querySelector('#btn-lb-binding-hub').addEventListener('click', () => showBindingHub(page))
+}
+
+// ===== 悬浮球：统一管理世界书绑定 =====
+async function showBindingHub(listPage) {
+  const overlay = lbCreateOverlay()
+  const modal = lbCreateSheet(`
+    <div class="sheet-title">世界书绑定</div>
+    <div class="lb-binding-hub-help">点一本世界书，设为全局或绑定给指定角色。</div>
+    <div class="lb-binding-hub-list" id="lb-binding-hub-list"></div>
+    <div class="sheet-actions">
+      <button class="btn-pill btn-full" id="btn-close-binding-hub">完成</button>
+    </div>
+  `)
+  document.getElementById('app').appendChild(overlay)
+  document.getElementById('app').appendChild(modal)
+  requestAnimationFrame(() => { overlay.classList.add('show'); modal.classList.add('show') })
+
+  const close = () => {
+    overlay.classList.remove('show'); modal.classList.remove('show')
+    setTimeout(() => { overlay.remove(); modal.remove() }, 200)
+  }
+  overlay.addEventListener('click', close)
+  modal.querySelector('#btn-close-binding-hub').addEventListener('click', close)
+
+  const renderHub = async () => {
+    const books = await loadLorebooks()
+    const chars = (await db.characters.toArray()).filter(c => c.type === 'char' || c.type === 'npc')
+    const hubList = modal.querySelector('#lb-binding-hub-list')
+    if (!books.length) {
+      hubList.innerHTML = '<div class="list-empty">暂无世界书</div>'
+      return
+    }
+    hubList.innerHTML = books.map(book => {
+      const boundNames = (book.charIds || [])
+        .map(id => chars.find(c => c.id === id)?.name)
+        .filter(Boolean)
+      const bindingText = book.scope === 'personal'
+        ? (boundNames.length ? boundNames.join('、') : '未绑定角色')
+        : '全部角色'
+      return `
+        <button class="lb-binding-hub-item" data-id="${book.id}">
+          <span class="lb-binding-hub-copy">
+            <span class="lb-binding-hub-name">${lbEscapeHTML(book.name || '未命名')}</span>
+            <span class="lb-binding-hub-current">${lbEscapeHTML(bindingText)}</span>
+          </span>
+          <span class="lb-binding-hub-scope">${book.scope === 'personal' ? '单人' : '全局'}</span>
+          <i class="fa fa-angle-right"></i>
+        </button>
+      `
+    }).join('')
+
+    hubList.querySelectorAll('.lb-binding-hub-item').forEach(button => {
+      button.addEventListener('click', () => {
+        const book = books.find(item => item.id === button.dataset.id)
+        if (book) showEditBindingModal(listPage, book, renderHub)
+      })
+    })
+  }
+
+  await renderHub()
 }
 
 // ===== 新建世界书弹窗 =====
@@ -287,16 +351,15 @@ function buildLbEntryPage(book) {
         <button class="btn-icon" id="btn-add-entry" title="添加条目"><i class="fa fa-plus"></i></button>
       </div>
     </div>
-    ${book.scope === 'personal' ? `
     <div class="lb-binding-bar" id="lb-binding-bar">
-      <span style="font-size:12px;color:var(--c-sub);flex-shrink:0">绑定角色</span>
+      <span class="lb-binding-label" id="lb-binding-label">适用范围</span>
       <div class="lb-binding-tags" id="lb-binding-tags"></div>
-      <button class="btn-ghost btn-sm" id="btn-edit-binding" style="flex-shrink:0">编辑</button>
-    </div>` : ''}
+      <button class="btn-ghost btn-sm" id="btn-edit-binding">设置</button>
+    </div>
     <div class="lb-entry-list" id="lb-entry-list"></div>
   `
   renderEntryList(page, book)
-  if (book.scope === 'personal') renderBindingTags(page, book)
+  renderBindingTags(page, book)
   bindEntryPageEvents(page, book)
   return page
 }
@@ -706,6 +769,16 @@ async function deleteEntry(entryPage, book, e, close) {
 async function renderBindingTags(page, book) {
   const tagsEl = page.querySelector('#lb-binding-tags')
   if (!tagsEl) return
+  const labelEl = page.querySelector('#lb-binding-label')
+  const buttonEl = page.querySelector('#btn-edit-binding')
+  if (book.scope !== 'personal') {
+    if (labelEl) labelEl.textContent = '适用范围'
+    if (buttonEl) buttonEl.textContent = '设置'
+    tagsEl.innerHTML = '<span class="lb-scope-tag">全部角色</span>'
+    return
+  }
+  if (labelEl) labelEl.textContent = '绑定角色'
+  if (buttonEl) buttonEl.textContent = '编辑'
   const ids = book.charIds || []
   if (!ids.length) {
     tagsEl.innerHTML = '<span style="font-size:12px;color:var(--c-hint)">未绑定角色</span>'
@@ -719,24 +792,36 @@ async function renderBindingTags(page, book) {
 }
 
 // ===== 编辑绑定角色弹窗 =====
-async function showEditBindingModal(page, book) {
+async function showEditBindingModal(page, book, onSaved) {
   const allChars = await db.characters.toArray()
   const bindable = allChars.filter(c => c.type === 'char' || c.type === 'npc')
   const ids = book.charIds || []
   const overlay = lbCreateOverlay()
   const modal = lbCreateSheet(`
-    <div class="sheet-title">编辑绑定角色</div>
+    <div class="sheet-title">适用范围与角色</div>
     <div style="padding:0 16px 8px">
-      <div style="font-size:12px;color:var(--c-sub);margin-bottom:6px">选择关联角色（可多选，仅CHAR/NPC）</div>
-      <div id="bind-chars-list" style="max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">
+      <div class="lb-scope-options">
+        <label class="lb-scope-option">
+          <input type="radio" name="lb-scope-edit" value="global" ${book.scope !== 'personal' ? 'checked' : ''}>
+          <span><b>全局</b><small>对所有角色生效</small></span>
+        </label>
+        <label class="lb-scope-option">
+          <input type="radio" name="lb-scope-edit" value="personal" ${book.scope === 'personal' ? 'checked' : ''}>
+          <span><b>单人</b><small>只对选中的角色生效，可多选</small></span>
+        </label>
+      </div>
+      <div id="bind-chars-section">
+        <div style="font-size:12px;color:var(--c-sub);margin:10px 0 6px">绑定角色（仅CHAR/NPC）</div>
+        <div id="bind-chars-list" style="max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">
         ${bindable.map(c => `
           <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--r-sm);cursor:pointer">
             <input type="checkbox" value="${c.id}" class="bind-char-cb" ${ids.includes(c.id) ? 'checked' : ''}>
-            <span style="font-size:14px;color:var(--c-text)">${c.name}</span>
+            <span style="font-size:14px;color:var(--c-text)">${lbEscapeHTML(c.name)}</span>
             <span style="font-size:11px;color:var(--c-hint);margin-left:auto">${c.type.toUpperCase()}</span>
           </label>
         `).join('')}
         ${!bindable.length ? '<div style="font-size:12px;color:var(--c-hint)">暂无可绑定角色</div>' : ''}
+        </div>
       </div>
     </div>
     <div class="sheet-actions">
@@ -753,13 +838,29 @@ async function showEditBindingModal(page, book) {
   }
   overlay.addEventListener('click', close)
 
+  const charSection = modal.querySelector('#bind-chars-section')
+  const syncScopeUI = () => {
+    const scope = modal.querySelector('input[name="lb-scope-edit"]:checked').value
+    charSection.classList.toggle('is-hidden', scope !== 'personal')
+  }
+  modal.querySelectorAll('input[name="lb-scope-edit"]').forEach(input => {
+    input.addEventListener('change', syncScopeUI)
+  })
+  syncScopeUI()
+
   modal.querySelector('#btn-save-binding').addEventListener('click', async () => {
-    const newIds = [...modal.querySelectorAll('.bind-char-cb:checked')].map(cb => parseInt(cb.value))
+    const scope = modal.querySelector('input[name="lb-scope-edit"]:checked').value
+    const newIds = scope === 'personal'
+      ? [...modal.querySelectorAll('.bind-char-cb:checked')].map(cb => parseInt(cb.value))
+      : []
+    book.scope = scope
     book.charIds = newIds
     const books = await loadLorebooks()
     const b = books.find(bk => bk.id === book.id)
-    if (b) { b.charIds = newIds; await saveLorebooks(books) }
+    if (b) { b.scope = scope; b.charIds = newIds; await saveLorebooks(books) }
     renderBindingTags(page, book)
+    if (onSaved) await onSaved()
+    window.toast(scope === 'personal' ? '角色绑定已保存' : '已设为全局世界书')
     close()
   })
 }
