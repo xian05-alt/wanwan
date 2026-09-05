@@ -503,6 +503,10 @@ window.loadAndApplySettings = async function() {
 
 // ===== 打开合并API配置子页面 =====
 function openApiConfigPage() {
+  if (window.WanWanApiGroups && window.WanWanApiGroups.openConfigPage) {
+    window.WanWanApiGroups.openConfigPage()
+    return
+  }
   var html =
     buildApiFormHTML('primary')
   var page = buildSubPage('sub-api-config', 'API 配置', html)
@@ -2007,8 +2011,9 @@ async function openFloatingBallPresetPopup(ball) {
   var showChatBeautyPreview = activePage && activePage.id === 'sub-chat-beauty-tutorial'
   var floatingBallConfig = await loadFloatingBallConfig()
   var showApiConsole = floatingBallConfig.apiConsoleEnabled === true
-  var presetRow = await db.config.get('apiPresets')
-  var presets = presetRow && Array.isArray(presetRow.value) ? presetRow.value : []
+  var apiGroups = window.WanWanApiGroups
+    ? await window.WanWanApiGroups.loadGroups()
+    : []
   var api = await loadApiConfig()
   var overlay = document.createElement('div')
   overlay.id = 'floating-ball-popup-overlay'
@@ -2017,7 +2022,7 @@ async function openFloatingBallPresetPopup(ball) {
   popup.id = 'floating-ball-preset-popup'
   popup.className = 'floating-ball-preset-popup'
   popup.setAttribute('role', 'dialog')
-  popup.setAttribute('aria-label', 'API 预设快速切换')
+  popup.setAttribute('aria-label', 'API 分组快速切换')
   var contextLinks = []
   if (showChatBeautyPreview) {
     contextLinks.push('<button type="button" class="floating-ball-context-link" id="floating-ball-chat-beauty-preview"><span>展示预览</span></button>')
@@ -2034,17 +2039,29 @@ async function openFloatingBallPresetPopup(ball) {
         settingsEscHtml(api.primary.model || '尚未配置模型') +
       '</span></div>' +
     '</div>' +
-    '<div class="floating-ball-popup-title">API 预设</div>'
-  if (presets.length) {
-    content += '<div class="floating-ball-preset-list">' + presets.map(function(preset, index) {
-      var active = isMatchingApiPreset(preset, api.primary)
-      return '<button type="button" class="floating-ball-preset-item' + (active ? ' is-current' : '') + '" data-preset-index="' + index + '">' +
-        '<span>' + settingsEscHtml(preset.name || '未命名预设') + '</span>' +
-        (active ? '<i class="fa-solid fa-check" aria-label="当前预设"></i>' : '') +
-      '</button>'
+    '<div class="floating-ball-popup-title">API 配置</div>'
+  if (apiGroups.length) {
+    content += '<div class="floating-ball-preset-list">' + apiGroups.map(function(group, groupIndex) {
+      var activeInGroup = window.WanWanApiGroups.isActiveGroup(group, api.primary)
+      return '<div class="floating-ball-api-group' + (activeInGroup ? ' is-current' : '') + '">' +
+        '<button type="button" class="floating-ball-api-group-toggle" data-api-group-toggle="' + groupIndex + '" aria-expanded="false">' +
+          '<span>' + settingsEscHtml(group.title || 'API 配置') + '</span>' +
+          '<small>' + group.models.length + ' 个模型</small>' +
+          '<i class="fa fa-angle-down"></i>' +
+        '</button>' +
+        '<div class="floating-ball-api-models" data-api-group-models="' + groupIndex + '" hidden>' +
+          group.models.map(function(model, modelIndex) {
+            var activeModel = window.WanWanApiGroups.isActiveModel(group, model, api.primary)
+            return '<button type="button" class="floating-ball-api-model' + (activeModel ? ' is-current' : '') + '" data-api-group-index="' + groupIndex + '" data-api-model-index="' + modelIndex + '">' +
+              '<span>' + settingsEscHtml(model || '未填写模型') + '</span>' +
+              (activeModel ? '<i class="fa-solid fa-check" aria-label="当前模型"></i>' : '') +
+            '</button>'
+          }).join('') +
+        '</div>' +
+      '</div>'
     }).join('') + '</div>'
   } else {
-    content += '<div class="floating-ball-preset-empty">尚未添加 API 预设</div>' +
+    content += '<div class="floating-ball-preset-empty">尚未添加 API 分组</div>' +
       '<button type="button" class="floating-ball-config-link" id="floating-ball-open-api-config">前往 API 配置</button>'
   }
   content +=
@@ -2068,12 +2085,29 @@ async function openFloatingBallPresetPopup(ball) {
     closeFloatingBallPresetPopup()
     openApiConsoleModal()
   })
-  popup.querySelectorAll('[data-preset-index]').forEach(function(button) {
+  popup.querySelectorAll('[data-api-group-toggle]').forEach(function(button) {
+    button.addEventListener('click', function() {
+      var index = button.getAttribute('data-api-group-toggle')
+      var models = popup.querySelector('[data-api-group-models="' + index + '"]')
+      if (!models) return
+      var expanded = !models.hidden
+      models.hidden = expanded
+      button.setAttribute('aria-expanded', expanded ? 'false' : 'true')
+      button.classList.toggle('is-expanded', !expanded)
+    })
+  })
+  popup.querySelectorAll('[data-api-model-index]').forEach(function(button) {
     button.addEventListener('click', async function() {
-      var preset = presets[parseInt(button.getAttribute('data-preset-index'), 10)]
-      if (!preset) return
-      await applyFloatingBallApiPreset(preset)
-      closeFloatingBallPresetPopup()
+      var group = apiGroups[parseInt(button.getAttribute('data-api-group-index'), 10)]
+      var model = group && group.models[parseInt(button.getAttribute('data-api-model-index'), 10)]
+      if (!group || !model) return
+      try {
+        await window.WanWanApiGroups.applyGroupModel(group.id, model)
+        closeFloatingBallPresetPopup()
+        window.toast('已切换到 ' + group.title + ' · ' + model)
+      } catch (error) {
+        window.toast('API 切换失败：' + (error.message || error))
+      }
     })
   })
   var configLink = popup.querySelector('#floating-ball-open-api-config')
