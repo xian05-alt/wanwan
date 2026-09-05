@@ -20100,12 +20100,7 @@ function getCallDurationSeconds() {
 // ===== TTS =====
 
 function unlockCallAudioPlayback() {
-  const keepAliveAudio = document.getElementById('keepalive-audio')
-  if (!keepAliveAudio) return
-  try {
-    keepAliveAudio.volume = 0
-    keepAliveAudio.play().catch(() => {})
-  } catch (_) {}
+  if (window.WanWanKeepAlive) window.WanWanKeepAlive.resumeFromGesture()
 }
 
 function cancelCallTTSRetry() {
