@@ -2368,6 +2368,7 @@ function addApiConsoleRecord(record) {
 }
 
 function normalizeApiConsoleToken(value) {
+  if (value == null || typeof value === 'boolean' || (typeof value === 'string' && !value.trim())) return null
   var number = Number(value)
   return Number.isFinite(number) && number >= 0 ? number : null
 }
@@ -2493,6 +2494,7 @@ function formatPromptCacheRecord(cache) {
   if (!cache) return ''
   var prefix = cache.channel ? cache.channel + ' · ' : ''
   if (cache.detailProvided && cache.cachedInput > 0) return prefix + '已命中 · ' + cache.cachedInput + ' Token'
+  if (cache.supported == null) return prefix + (cache.detailProvided ? '本次缓存 Token 为 0' : '缓存支持待确认 · 上游未返回明细')
   if (cache.supported === false) return prefix + '未启用'
   if (cache.detailProvided) return prefix + '已启用 · 本次未命中'
   return prefix + '已启用 · 上游未返回明细'
@@ -3548,7 +3550,7 @@ function getGeminiPromptCacheInfo(url, model) {
     }
   }
   if (sora) return { channel: 'Sora', supported: false, proxy: false, known: true }
-  if (kongbeiqie) return { channel: '空悲切', supported: supportsGeminiImplicitCache(model), proxy: false, known: true }
+  if (kongbeiqie) return { channel: '空悲切', supported: null, proxy: false, known: true }
   return { channel: 'Gemini 中转', supported: false, proxy: false, known: false }
 }
 
@@ -3556,7 +3558,7 @@ function readPromptCacheRecord(cfg, body, json) {
   var info = getGeminiPromptCacheInfo(cfg && cfg.url, body && body.model)
   if (!info) return null
   var cached = readApiConsoleCachedInput(json)
-  if (!info.supported && info.channel !== 'Sora' && !(cached.provided && cached.value > 0)) return null
+  if (!info.supported && info.channel !== 'Sora' && info.channel !== '空悲切' && !(cached.provided && cached.value > 0)) return null
   return {
     channel: info.channel,
     supported: info.supported,
@@ -3582,6 +3584,8 @@ function updateApiProviderHint(page, idPrefix) {
       : 'Gemini 官方请求会经弯弯 Railway 转发；当前模型未确认支持隐式缓存。'
   } else if (info.channel === 'Sora') {
     hint.textContent = 'Sora 当前不按缓存渠道处理；若上游明确返回缓存 Token，API 控制台只显示真实命中。'
+  } else if (info.channel === '空悲切') {
+    hint.textContent = '空悲切的缓存支持需按具体线路确认；API 控制台会显示上游返回的真实缓存用量。'
   } else if (info.known) {
     hint.textContent = info.supported
       ? info.channel + ' 的 Gemini 缓存由上游自动管理；弯弯不会注入私有字段，命中以 API 控制台的上游用量为准。'
