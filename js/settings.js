@@ -582,6 +582,7 @@ function buildApiFormHTML(type) {
       '<select class="input-field" id="' + idPfx + '-model"><option value="">拉取后选择模型</option></select>' +
       '<button class="btn-ghost btn-sm" id="btn-load-' + type + '-models">获取</button>' +
     '</div>' +
+    '<div class="section-desc api-provider-hint" id="' + idPfx + '-provider-hint" hidden></div>' +
     '<div class="api-test-row">' +
       (isPrimary
         ? '<button class="btn-ghost" id="btn-test-' + type + '-chat">连接测试</button>'
@@ -2371,6 +2372,34 @@ function normalizeApiConsoleToken(value) {
   return Number.isFinite(number) && number >= 0 ? number : null
 }
 
+function getNestedApiValue(object, path) {
+  var current = object
+  for (var i = 0; i < path.length; i++) {
+    if (!current || typeof current !== 'object' || !Object.prototype.hasOwnProperty.call(current, path[i])) {
+      return { provided: false, value: null }
+    }
+    current = current[path[i]]
+  }
+  return { provided: true, value: normalizeApiConsoleToken(current) }
+}
+
+function readApiConsoleCachedInput(json) {
+  var candidates = [
+    ['usage', 'prompt_tokens_details', 'cached_tokens'],
+    ['usage', 'input_tokens_details', 'cached_tokens'],
+    ['usage', 'cached_tokens'],
+    ['usage', 'cached_input_tokens'],
+    ['usage', 'cache_read_input_tokens'],
+    ['usage', 'cache_read_tokens'],
+    ['usageMetadata', 'cachedContentTokenCount']
+  ]
+  for (var i = 0; i < candidates.length; i++) {
+    var found = getNestedApiValue(json, candidates[i])
+    if (found.provided && found.value != null) return found
+  }
+  return { provided: false, value: null }
+}
+
 function readApiConsoleUsage(json) {
   var usage = json && json.usage && typeof json.usage === 'object' ? json.usage : {}
   var input = normalizeApiConsoleToken(usage.prompt_tokens)
@@ -2379,7 +2408,8 @@ function readApiConsoleUsage(json) {
   if (output == null) output = normalizeApiConsoleToken(usage.output_tokens)
   var total = normalizeApiConsoleToken(usage.total_tokens)
   if (total == null && input != null && output != null) total = input + output
-  return { input: input, output: output, total: total }
+  var cached = readApiConsoleCachedInput(json)
+  return { input: input, output: output, total: total, cachedInput: cached.value, cacheDetailProvided: cached.provided }
 }
 
 function formatApiConsoleResponseValue(value) {
@@ -2459,6 +2489,15 @@ function formatApiConsoleToken(value) {
   return value == null ? '接口未提供' : String(value)
 }
 
+function formatPromptCacheRecord(cache) {
+  if (!cache) return ''
+  var prefix = cache.channel ? cache.channel + ' · ' : ''
+  if (cache.detailProvided && cache.cachedInput > 0) return prefix + '已命中 · ' + cache.cachedInput + ' Token'
+  if (cache.supported === false) return prefix + '未启用'
+  if (cache.detailProvided) return prefix + '已启用 · 本次未命中'
+  return prefix + '已启用 · 上游未返回明细'
+}
+
 function buildApiConsoleRecordHTML(record) {
   var stateLabel = record.ok ? '成功' : '失败'
   var statusText = record.status == null ? '无 HTTP 状态' : 'HTTP ' + record.status
@@ -2466,6 +2505,9 @@ function buildApiConsoleRecordHTML(record) {
   var detailText = record.ok ? record.content : record.error
   var reasoningHtml = record.ok && record.reasoning
     ? '<div class="api-console-detail-label">Reasoning Content</div><pre>' + settingsEscHtml(record.reasoning) + '</pre>'
+    : ''
+  var cacheHtml = record.cache
+    ? '<div class="api-console-meta-wide"><span>Gemini 缓存</span><strong>' + settingsEscHtml(formatPromptCacheRecord(record.cache)) + '</strong></div>'
     : ''
   return '<details class="api-console-record ' + (record.ok ? 'is-success' : 'is-error') + '">' +
     '<summary>' +
@@ -2481,6 +2523,7 @@ function buildApiConsoleRecordHTML(record) {
         '<div><span>输入 Token</span><strong>' + settingsEscHtml(formatApiConsoleToken(record.tokens && record.tokens.input)) + '</strong></div>' +
         '<div><span>输出 Token</span><strong>' + settingsEscHtml(formatApiConsoleToken(record.tokens && record.tokens.output)) + '</strong></div>' +
         '<div class="api-console-meta-wide"><span>总 Token</span><strong>' + settingsEscHtml(formatApiConsoleToken(record.tokens && record.tokens.total)) + '</strong></div>' +
+        cacheHtml +
       '</div>' +
       '<div class="api-console-detail-label">' + detailTitle + '</div>' +
       '<pre>' + settingsEscHtml(detailText || (record.ok ? '（空内容）' : '未知错误')) + '</pre>' +
@@ -2792,6 +2835,7 @@ async function loadImageGenConfig(noCache) {
 function getImageGenerationUrl(url) {
   var clean = normalizeApiBaseUrl(url)
   if (!clean) return ''
+  if (isOfficialGeminiApiUrl(clean)) return '/api/gemini/images/generations'
   if (/\/chat\/completions$/i.test(clean)) {
     return clean.replace(/\/chat\/completions$/i, '/images/generations')
   }
@@ -2802,6 +2846,7 @@ function getImageGenerationUrl(url) {
 function getImageEditsUrl(url) {
   var clean = normalizeApiBaseUrl(url)
   if (!clean) return ''
+  if (isOfficialGeminiApiUrl(clean)) return '/api/gemini/images/edits'
   if (/\/chat\/completions$/i.test(clean)) {
     return clean.replace(/\/chat\/completions$/i, '/images/edits')
   }
@@ -2815,6 +2860,7 @@ function getImageEditsUrl(url) {
 function getImageModelsUrl(url) {
   var clean = normalizeApiBaseUrl(url)
   if (!clean) return ''
+  if (isOfficialGeminiApiUrl(clean)) return '/api/gemini/models'
   if (/\/chat\/completions$/i.test(clean)) return clean.replace(/\/chat\/completions$/i, '/models')
   if (/\/images\/generations$/i.test(clean)) return clean.replace(/\/images\/generations$/i, '/models')
   if (/\/images\/edits$/i.test(clean)) return clean.replace(/\/images\/edits$/i, '/models')
@@ -2853,11 +2899,9 @@ async function loadImageGenModelList(page) {
   if (!urlEl || !urlEl.value) { window.toast('请先填写 API URL'); return }
   try {
     var url = getImageModelsUrl(urlEl.value)
-    var isGeminiApi = /generativelanguage\.googleapis\.com/i.test(url)
-    var headers = isGeminiApi
-      ? { 'x-goog-api-key': keyEl ? keyEl.value : '' }
-      : { Authorization: 'Bearer ' + (keyEl ? keyEl.value : '') }
-    var res = await fetch(url, { headers: headers })
+    var res = await fetch(url, {
+      headers: { Authorization: 'Bearer ' + (keyEl ? keyEl.value : '') }
+    })
     var json = await res.json()
     if (!res.ok) throw new Error((json && json.error && (json.error.message || json.error)) || ('HTTP ' + res.status))
     var models = parseModelList(json)
@@ -3119,8 +3163,9 @@ function getApiConsoleErrorMessage(parsed, rawText, fallback) {
 async function performTrackedChatCompletion(cfg, body, apiType, captureEnabled) {
   var startedAt = Date.now()
   var response
+  var requestUrl = isOfficialGeminiApiUrl(cfg.url) ? '/api/gemini/chat/completions' : normalizeApiBaseUrl(cfg.url) + '/chat/completions'
   try {
-    response = await fetch(cfg.url + '/chat/completions', {
+    response = await fetch(requestUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.key },
       body: JSON.stringify(body)
@@ -3214,6 +3259,7 @@ async function performTrackedChatCompletion(cfg, body, apiType, captureEnabled) 
       apiType: apiType,
       model: parsed && typeof parsed.model === 'string' ? parsed.model : '',
       tokens: readApiConsoleUsage(parsed),
+      cache: readPromptCacheRecord(cfg, body, parsed),
       content: formatApiConsoleResponseValue(message && message.content),
       reasoning: formatApiConsoleResponseValue(message && message.reasoning_content),
       error: ''
@@ -3464,6 +3510,88 @@ function normalizeApiBaseUrl(url) {
   return String(url || '').trim().replace(/\/+$/, '')
 }
 
+function getApiHostname(url) {
+  try { return new URL(normalizeApiBaseUrl(url)).hostname.toLowerCase() } catch (_) { return '' }
+}
+
+function isOfficialGeminiApiUrl(url) {
+  return getApiHostname(url) === 'generativelanguage.googleapis.com'
+}
+
+function isGeminiModel(model) {
+  return /gemini/i.test(String(model || ''))
+}
+
+function supportsGeminiImplicitCache(model) {
+  var match = /gemini-(\d+)(?:\.(\d+))?/i.exec(String(model || ''))
+  if (!match) return false
+  var major = Number(match[1])
+  var minor = Number(match[2] || 0)
+  return major > 2 || (major === 2 && minor >= 5)
+}
+
+function getGeminiPromptCacheInfo(url, model) {
+  var host = getApiHostname(url)
+  var official = host === 'generativelanguage.googleapis.com'
+  var sora = host === 'usora.net' || /\.usora\.net$/.test(host)
+  var kongbeiqie = host === 'xn--vduyey89e.com' || /\.xn--vduyey89e\.com$/.test(host) ||
+    host === 'xn--lbr707ayot.cn' || /\.xn--lbr707ayot\.cn$/.test(host) ||
+    host === 'blanko.cc' || /\.blanko\.cc$/.test(host) || host === 'kbq.de5.net'
+  var gemini = isGeminiModel(model)
+  if (!official && !gemini) return null
+  if (official) {
+    return {
+      channel: 'Gemini 官方',
+      supported: supportsGeminiImplicitCache(model),
+      proxy: true,
+      known: true
+    }
+  }
+  if (sora) return { channel: 'Sora', supported: false, proxy: false, known: true }
+  if (kongbeiqie) return { channel: '空悲切', supported: supportsGeminiImplicitCache(model), proxy: false, known: true }
+  return { channel: 'Gemini 中转', supported: false, proxy: false, known: false }
+}
+
+function readPromptCacheRecord(cfg, body, json) {
+  var info = getGeminiPromptCacheInfo(cfg && cfg.url, body && body.model)
+  if (!info) return null
+  var cached = readApiConsoleCachedInput(json)
+  if (!info.supported && info.channel !== 'Sora' && !(cached.provided && cached.value > 0)) return null
+  return {
+    channel: info.channel,
+    supported: info.supported,
+    cachedInput: cached.value,
+    detailProvided: cached.provided
+  }
+}
+
+function updateApiProviderHint(page, idPrefix) {
+  var hint = page.querySelector('#' + idPrefix + '-provider-hint')
+  if (!hint) return
+  var urlEl = page.querySelector('#' + idPrefix + '-base-url')
+  var modelEl = page.querySelector('#' + idPrefix + '-model-input')
+  var info = getGeminiPromptCacheInfo(urlEl && urlEl.value, modelEl && modelEl.value)
+  if (!info) {
+    hint.hidden = true
+    hint.textContent = ''
+    return
+  }
+  if (info.channel === 'Gemini 官方') {
+    hint.textContent = info.supported
+      ? 'Gemini 官方请求会经弯弯 Railway 转发；此模型自动使用隐式缓存，命中以 API 控制台的上游用量为准。'
+      : 'Gemini 官方请求会经弯弯 Railway 转发；当前模型未确认支持隐式缓存。'
+  } else if (info.channel === 'Sora') {
+    hint.textContent = 'Sora 当前不按缓存渠道处理；若上游明确返回缓存 Token，API 控制台只显示真实命中。'
+  } else if (info.known) {
+    hint.textContent = info.supported
+      ? info.channel + ' 的 Gemini 缓存由上游自动管理；弯弯不会注入私有字段，命中以 API 控制台的上游用量为准。'
+      : info.channel + ' 的当前 Gemini 模型未确认支持隐式缓存。'
+  } else {
+    hint.textContent = '此 Gemini 中转的缓存能力由服务商决定；弯弯只读取上游返回的真实缓存用量。'
+  }
+  hint.hidden = false
+}
+
 function validateApiTestConfig(cfg, needsModel) {
   if (!cfg.url) throw new Error('请先填写 Base URL')
   if (!cfg.key) throw new Error('请先填写 API Key')
@@ -3652,8 +3780,13 @@ async function loadApiForm(page, prefix) {
   if (modelEl && modelInputEl) {
     modelEl.addEventListener('change', function() {
       if (modelEl.value) modelInputEl.value = modelEl.value
+      updateApiProviderHint(page, idPrefix)
     })
   }
+  var baseUrlEl = page.querySelector('#' + idPrefix + '-base-url')
+  if (baseUrlEl) baseUrlEl.addEventListener('input', function() { updateApiProviderHint(page, idPrefix) })
+  if (modelInputEl) modelInputEl.addEventListener('input', function() { updateApiProviderHint(page, idPrefix) })
+  updateApiProviderHint(page, idPrefix)
 }
 
 // ===== 保存API配置 =====
@@ -3697,16 +3830,19 @@ async function loadModelList(page, prefix) {
   var inputEl = page.querySelector('#' + idPrefix + '-model-input')
   if (!baseUrlEl || !baseUrlEl.value) { window.toast('请先填写Base URL'); return }
   try {
-    var res = await fetch(baseUrlEl.value + '/models', {
+    var officialGemini = isOfficialGeminiApiUrl(baseUrlEl.value)
+    var modelsUrl = officialGemini ? '/api/gemini/models' : normalizeApiBaseUrl(baseUrlEl.value) + '/models'
+    var res = await fetch(modelsUrl, {
       headers: { Authorization: 'Bearer ' + (keyEl ? keyEl.value : '') }
     })
-    var json = await res.json()
+    var json = await readApiTestJsonResponse(res, '获取模型失败')
     var models = (json.data || []).map(function(m) { return m.id }).filter(Boolean)
     selectEl.innerHTML = '<option value="">拉取后选择模型</option>' +
       models.map(function(m) {
         return '<option value="' + settingsEscHtml(m) + '">' + settingsEscHtml(m) + '</option>'
       }).join('')
     if (inputEl && inputEl.value) syncModelSelectOption(page, idPrefix, inputEl.value)
+    updateApiProviderHint(page, idPrefix)
     window.toast('已加载 ' + models.length + ' 个模型')
   } catch (e) { window.toast('获取模型失败：' + e.message) }
 }
